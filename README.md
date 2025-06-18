@@ -1,22 +1,5 @@
 # MCP – Claude Desktop en Debian
 
-[![Repositorio GitHub](https://img.shields.io/badge/Repositorio-GitHub-blue.svg)](https://github.com/aaddrick/claude-desktop-debian)
-
-## 📖 Descripción
-
-MCP (My Claude Platform) es una pequeña plataforma de servicios para integrar el cliente desktop de Claude en sistemas Debian. En este repositorio encontrarás:
-
-* Scripts de instalación de dependencias (Node.js vía NVM).
-* Configuración del servidor de operaciones de ficheros (`file-operations`).
-* Ejemplo de fichero de configuración JSON para arrancar tu servidor.
-
-## 🛠️ Requisitos
-
-* **Debian** (o derivado compatible).
-* **cURL** instalado.
-* **Git** para clonar este repositorio.
-* **ZSH** o **Bash** (se usará NVM).
-
 ## 🚀 Instalación
 
 1. **Clonar el repositorio**
@@ -48,10 +31,10 @@ Crea un archivo llamado `claude_desktop_config.json` con el siguiente contenido 
 {
   "mcpServers": {
     "file-operations": {
-      "command": "/home/amunoz/.nvm/versions/node/v20.19.2/bin/node",
       "args": ["/home/amunoz/mcp-file-server/server.js"],
       "env": {}
     }
   }
 }
 ```
+Clonar este repositorio y poner en el archivo `claude_desktop_config.json` la url de la ubicacion server.js

@@ -8,11 +8,16 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import fs from "fs-extra";
 import path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
+import crypto from "crypto";
+
+const execAsync = promisify(exec);
 
 const server = new Server(
   {
     name: "file-operations-server",
-    version: "0.2.0",
+    version: "0.4.0",
   },
   {
     capabilities: {
@@ -109,6 +114,126 @@ async function searchTextInFiles(searchText, basePath, options = {}) {
 
   await searchInDirectory(basePath);
   return results;
+}
+
+async function editLine(filePath, lineNumber, newContent) {
+  const content = await fs.readFile(filePath, "utf-8");
+  const lines = content.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length) {
+    throw new Error("Número de línea fuera de rango");
+  }
+  lines[lineNumber - 1] = newContent;
+  await fs.writeFile(filePath, lines.join("\n"));
+}
+
+async function fileManage(action, filePath, content = "", newName) {
+  switch (action) {
+    case "create":
+      await fs.ensureFile(filePath);
+      break;
+    case "read":
+      return await fs.readFile(filePath, "utf-8");
+    case "write":
+      await fs.writeFile(filePath, content);
+      break;
+    case "delete":
+      await fs.remove(filePath);
+      break;
+    case "rename":
+      if (!newName) {
+        throw new Error("new_name requerido para rename");
+      }
+      await fs.rename(filePath, newName);
+      break;
+    default:
+      throw new Error(`Acción no soportada: ${action}`);
+  }
+}
+
+async function shellExecute(command, timeout = 60000) {
+  const { stdout, stderr } = await execAsync(command, { timeout });
+  return { stdout, stderr };
+}
+
+async function dbQuery(connectionString, query) {
+  const cmd = `sqlite3 ${connectionString} "${query.replace(/"/g, '\\"')}"`;
+  const { stdout, stderr } = await execAsync(cmd);
+  if (stderr) {
+    return stderr;
+  }
+  return stdout;
+}
+
+async function httpRequest(method, url, headers = {}, body = null) {
+  const res = await fetch(url, { method, headers, body });
+  const text = await res.text();
+  return {
+    status: res.status,
+    headers: Object.fromEntries(res.headers.entries()),
+    body: text,
+  };
+}
+
+async function summarizeDocument(filePath, length = 100) {
+  const content = await fs.readFile(filePath, "utf-8");
+  const words = content.split(/\s+/).slice(0, length);
+  return words.join(" ");
+}
+
+async function copyPath(src, dest) {
+  await fs.copy(src, dest);
+}
+
+async function movePath(src, dest) {
+  await fs.move(src, dest, { overwrite: true });
+}
+
+async function getFileInfo(filePath) {
+  const stats = await fs.stat(filePath);
+  return {
+    size: stats.size,
+    modified: stats.mtime.toISOString(),
+    created: stats.birthtime.toISOString(),
+    isDirectory: stats.isDirectory(),
+    isFile: stats.isFile()
+  };
+}
+
+async function insertLine(filePath, lineNumber, content) {
+  const text = await fs.readFile(filePath, "utf-8");
+  const lines = text.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length + 1) {
+    throw new Error("Número de línea fuera de rango");
+  }
+  lines.splice(lineNumber - 1, 0, content);
+  await fs.writeFile(filePath, lines.join("\n"));
+}
+
+async function deleteLine(filePath, lineNumber) {
+  const text = await fs.readFile(filePath, "utf-8");
+  const lines = text.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length) {
+    throw new Error("Número de línea fuera de rango");
+  }
+  lines.splice(lineNumber - 1, 1);
+  await fs.writeFile(filePath, lines.join("\n"));
+}
+
+async function replaceText(filePath, searchValue, replaceValue) {
+  const text = await fs.readFile(filePath, "utf-8");
+  const regex = new RegExp(searchValue, "g");
+  const newText = text.replace(regex, replaceValue);
+  await fs.writeFile(filePath, newText);
+}
+
+async function computeHash(filePath, algorithm = "sha256") {
+  const hash = crypto.createHash(algorithm);
+  const stream = fs.createReadStream(filePath);
+  return await new Promise((resolve, reject) => {
+    stream.on("data", (data) => hash.update(data));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
 }
 
 // Herramienta para listar archivos
@@ -263,6 +388,172 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["pattern", "directory"],
         },
+      },
+      {
+        name: "edit_line",
+        description: "Modifica una línea específica de un archivo de texto",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            line_number: { type: "number", description: "Número de línea" },
+            new_content: { type: "string", description: "Nuevo contenido" }
+          },
+          required: ["file_path", "line_number", "new_content"]
+        }
+      },
+      {
+        name: "file_manage",
+        description: "Operaciones genéricas con archivos",
+        inputSchema: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              enum: ["create", "read", "write", "delete", "rename"],
+              description: "Acción a realizar"
+            },
+            path: { type: "string", description: "Ruta del archivo" },
+            content: { type: "string", description: "Contenido opcional" },
+            new_name: { type: "string", description: "Nuevo nombre para rename" }
+          },
+          required: ["action", "path"]
+        }
+      },
+      {
+        name: "shell_execute",
+        description: "Ejecuta un comando de shell y devuelve la salida",
+        inputSchema: {
+          type: "object",
+          properties: {
+            command: { type: "string", description: "Comando a ejecutar" },
+            timeout: { type: "number", description: "Tiempo máximo en segundos", default: 60 }
+          },
+          required: ["command"]
+        }
+      },
+      {
+        name: "db_query",
+        description: "Ejecuta consultas SQL utilizando sqlite3",
+        inputSchema: {
+          type: "object",
+          properties: {
+            connection_string: { type: "string", description: "Ruta de la base de datos" },
+            query: { type: "string", description: "Consulta a ejecutar" }
+          },
+          required: ["connection_string", "query"]
+        }
+      },
+      {
+        name: "http_request",
+        description: "Realiza una petición HTTP básica",
+        inputSchema: {
+          type: "object",
+          properties: {
+            method: { type: "string", enum: ["GET", "POST", "PUT", "DELETE"], default: "GET" },
+            url: { type: "string", description: "URL destino" },
+            headers: { type: "object", description: "Cabeceras" },
+            body: { type: "string", description: "Cuerpo de la petición" }
+          },
+          required: ["method", "url"]
+        }
+      },
+      {
+        name: "doc_summarize",
+        description: "Resume un documento de texto devolviendo las primeras palabras",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del documento" },
+            length: { type: "number", description: "Número de palabras", default: 100 }
+          },
+          required: ["file_path"]
+        }
+      },
+      {
+        name: "copy_path",
+        description: "Copia un archivo o directorio a otra ubicación",
+        inputSchema: {
+          type: "object",
+          properties: {
+            src: { type: "string", description: "Ruta de origen" },
+            dest: { type: "string", description: "Ruta de destino" }
+          },
+          required: ["src", "dest"]
+        }
+      },
+      {
+        name: "move_path",
+        description: "Mueve un archivo o directorio",
+        inputSchema: {
+          type: "object",
+          properties: {
+            src: { type: "string", description: "Ruta de origen" },
+            dest: { type: "string", description: "Ruta de destino" }
+          },
+          required: ["src", "dest"]
+        }
+      },
+      {
+        name: "file_info",
+        description: "Obtiene información de un archivo o directorio",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" }
+          },
+          required: ["file_path"]
+        }
+      },
+      {
+        name: "insert_line",
+        description: "Inserta una línea en una posición específica de un archivo",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            line_number: { type: "number", description: "Número de línea" },
+            content: { type: "string", description: "Contenido a insertar" }
+          },
+          required: ["file_path", "line_number", "content"]
+        }
+      },
+      {
+        name: "delete_line",
+        description: "Elimina una línea específica de un archivo",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            line_number: { type: "number", description: "Número de línea" }
+          },
+          required: ["file_path", "line_number"]
+        }
+      },
+      {
+        name: "replace_text",
+        description: "Reemplaza texto en un archivo",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            search: { type: "string", description: "Texto a buscar" },
+            replace: { type: "string", description: "Texto de reemplazo" }
+          },
+          required: ["file_path", "search", "replace"]
+        }
+      },
+      {
+        name: "compute_hash",
+        description: "Calcula el hash de un archivo (sha256 por defecto)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            algorithm: { type: "string", description: "Algoritmo", default: "sha256" }
+          },
+          required: ["file_path"]
+        }
       },
     ],
   };
@@ -463,9 +754,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "find_files": {
-        const { 
-          pattern, 
-          directory, 
+        const {
+          pattern,
+          directory,
           case_sensitive = false,
           max_results = 100
         } = args;
@@ -508,6 +799,98 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "edit_line": {
+        const { file_path, line_number, new_content } = args;
+        await editLine(file_path, line_number, new_content);
+        return {
+          content: [
+            { type: "text", text: `Línea ${line_number} de ${file_path} actualizada` }
+          ]
+        };
+      }
+
+      case "file_manage": {
+        const { action, path: filePath, content = "", new_name } = args;
+        const result = await fileManage(action, filePath, content, new_name);
+        const response = result !== undefined ? `Resultado: ${result}` : `Acción ${action} completada`;
+        return {
+          content: [ { type: "text", text: response } ]
+        };
+      }
+
+      case "shell_execute": {
+        const { command, timeout = 60 } = args;
+        const { stdout, stderr } = await shellExecute(command, timeout * 1000);
+        return { content: [ { type: "text", text: `STDOUT:\n${stdout}\nSTDERR:\n${stderr}` } ] };
+      }
+
+      case "db_query": {
+        const { connection_string, query } = args;
+        const output = await dbQuery(connection_string, query);
+        return { content: [ { type: "text", text: output } ] };
+      }
+
+      case "http_request": {
+        const { method, url, headers = {}, body = null } = args;
+        const result = await httpRequest(method, url, headers, body);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Status: ${result.status}\n${JSON.stringify(result.headers)}\n\n${result.body}`
+            }
+          ]
+        };
+      }
+
+      case "doc_summarize": {
+        const { file_path, length = 100 } = args;
+        const summary = await summarizeDocument(file_path, length);
+        return { content: [ { type: "text", text: summary } ] };
+      }
+
+      case "copy_path": {
+        const { src, dest } = args;
+        await copyPath(src, dest);
+        return { content: [ { type: "text", text: `Copiado ${src} -> ${dest}` } ] };
+      }
+
+      case "move_path": {
+        const { src, dest } = args;
+        await movePath(src, dest);
+        return { content: [ { type: "text", text: `Movido ${src} -> ${dest}` } ] };
+      }
+
+      case "file_info": {
+        const { file_path } = args;
+        const info = await getFileInfo(file_path);
+        return { content: [ { type: "text", text: JSON.stringify(info, null, 2) } ] };
+      }
+
+      case "insert_line": {
+        const { file_path, line_number, content } = args;
+        await insertLine(file_path, line_number, content);
+        return { content: [ { type: "text", text: `Línea insertada en ${file_path}` } ] };
+      }
+
+      case "delete_line": {
+        const { file_path, line_number } = args;
+        await deleteLine(file_path, line_number);
+        return { content: [ { type: "text", text: `Línea ${line_number} eliminada en ${file_path}` } ] };
+      }
+
+      case "replace_text": {
+        const { file_path, search, replace } = args;
+        await replaceText(file_path, search, replace);
+        return { content: [ { type: "text", text: `Texto reemplazado en ${file_path}` } ] };
+      }
+
+      case "compute_hash": {
+        const { file_path, algorithm = "sha256" } = args;
+        const hash = await computeHash(file_path, algorithm);
+        return { content: [ { type: "text", text: `${algorithm}: ${hash}` } ] };
+      }
+
       default:
         throw new Error(`Herramienta desconocida: ${name}`);
     }
@@ -527,7 +910,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Servidor MCP de archivos iniciado (v0.2.0 con búsqueda)");
+  console.error("Servidor MCP de archivos iniciado (v0.4.0 con herramientas ampliadas)");
 }
 
 main().catch(console.error);

@@ -41,7 +41,7 @@ Clonar este repositorio y poner en el archivo `claude_desktop_config.json` la ur
 
 ## 🛠 Herramientas disponibles
 
-La versión 0.3.0 del servidor expone varias herramientas MCP para facilitar operaciones locales:
+La versión 0.4.0 del servidor expone varias herramientas MCP para facilitar operaciones locales:
 
 - `read_file`, `write_file`, `create_directory`, `list_directory`, `delete_file`
 - `search_text`, `find_files`
@@ -51,3 +51,8 @@ La versión 0.3.0 del servidor expone varias herramientas MCP para facilitar ope
 - `db_query` que ejecuta consultas SQL usando `sqlite3`
 - `http_request` para realizar peticiones HTTP
 - `doc_summarize` que resume documentos de texto
+- `copy_path` y `move_path` para copiar o mover archivos y carpetas
+- `file_info` para obtener metadatos de archivos
+- `insert_line` y `delete_line` para modificar archivos línea a línea
+- `replace_text` para buscar y reemplazar texto en archivos
+- `compute_hash` que devuelve el hash de un archivo

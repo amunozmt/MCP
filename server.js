@@ -10,13 +10,14 @@ import fs from "fs-extra";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
+import crypto from "crypto";
 
 const execAsync = promisify(exec);
 
 const server = new Server(
   {
     name: "file-operations-server",
-    version: "0.3.0",
+    version: "0.4.0",
   },
   {
     capabilities: {
@@ -177,6 +178,62 @@ async function summarizeDocument(filePath, length = 100) {
   const content = await fs.readFile(filePath, "utf-8");
   const words = content.split(/\s+/).slice(0, length);
   return words.join(" ");
+}
+
+async function copyPath(src, dest) {
+  await fs.copy(src, dest);
+}
+
+async function movePath(src, dest) {
+  await fs.move(src, dest, { overwrite: true });
+}
+
+async function getFileInfo(filePath) {
+  const stats = await fs.stat(filePath);
+  return {
+    size: stats.size,
+    modified: stats.mtime.toISOString(),
+    created: stats.birthtime.toISOString(),
+    isDirectory: stats.isDirectory(),
+    isFile: stats.isFile()
+  };
+}
+
+async function insertLine(filePath, lineNumber, content) {
+  const text = await fs.readFile(filePath, "utf-8");
+  const lines = text.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length + 1) {
+    throw new Error("Número de línea fuera de rango");
+  }
+  lines.splice(lineNumber - 1, 0, content);
+  await fs.writeFile(filePath, lines.join("\n"));
+}
+
+async function deleteLine(filePath, lineNumber) {
+  const text = await fs.readFile(filePath, "utf-8");
+  const lines = text.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length) {
+    throw new Error("Número de línea fuera de rango");
+  }
+  lines.splice(lineNumber - 1, 1);
+  await fs.writeFile(filePath, lines.join("\n"));
+}
+
+async function replaceText(filePath, searchValue, replaceValue) {
+  const text = await fs.readFile(filePath, "utf-8");
+  const regex = new RegExp(searchValue, "g");
+  const newText = text.replace(regex, replaceValue);
+  await fs.writeFile(filePath, newText);
+}
+
+async function computeHash(filePath, algorithm = "sha256") {
+  const hash = crypto.createHash(algorithm);
+  const stream = fs.createReadStream(filePath);
+  return await new Promise((resolve, reject) => {
+    stream.on("data", (data) => hash.update(data));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
 }
 
 // Herramienta para listar archivos
@@ -409,6 +466,91 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             file_path: { type: "string", description: "Ruta del documento" },
             length: { type: "number", description: "Número de palabras", default: 100 }
+          },
+          required: ["file_path"]
+        }
+      },
+      {
+        name: "copy_path",
+        description: "Copia un archivo o directorio a otra ubicación",
+        inputSchema: {
+          type: "object",
+          properties: {
+            src: { type: "string", description: "Ruta de origen" },
+            dest: { type: "string", description: "Ruta de destino" }
+          },
+          required: ["src", "dest"]
+        }
+      },
+      {
+        name: "move_path",
+        description: "Mueve un archivo o directorio",
+        inputSchema: {
+          type: "object",
+          properties: {
+            src: { type: "string", description: "Ruta de origen" },
+            dest: { type: "string", description: "Ruta de destino" }
+          },
+          required: ["src", "dest"]
+        }
+      },
+      {
+        name: "file_info",
+        description: "Obtiene información de un archivo o directorio",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" }
+          },
+          required: ["file_path"]
+        }
+      },
+      {
+        name: "insert_line",
+        description: "Inserta una línea en una posición específica de un archivo",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            line_number: { type: "number", description: "Número de línea" },
+            content: { type: "string", description: "Contenido a insertar" }
+          },
+          required: ["file_path", "line_number", "content"]
+        }
+      },
+      {
+        name: "delete_line",
+        description: "Elimina una línea específica de un archivo",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            line_number: { type: "number", description: "Número de línea" }
+          },
+          required: ["file_path", "line_number"]
+        }
+      },
+      {
+        name: "replace_text",
+        description: "Reemplaza texto en un archivo",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            search: { type: "string", description: "Texto a buscar" },
+            replace: { type: "string", description: "Texto de reemplazo" }
+          },
+          required: ["file_path", "search", "replace"]
+        }
+      },
+      {
+        name: "compute_hash",
+        description: "Calcula el hash de un archivo (sha256 por defecto)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            algorithm: { type: "string", description: "Algoritmo", default: "sha256" }
           },
           required: ["file_path"]
         }
@@ -707,6 +849,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [ { type: "text", text: summary } ] };
       }
 
+      case "copy_path": {
+        const { src, dest } = args;
+        await copyPath(src, dest);
+        return { content: [ { type: "text", text: `Copiado ${src} -> ${dest}` } ] };
+      }
+
+      case "move_path": {
+        const { src, dest } = args;
+        await movePath(src, dest);
+        return { content: [ { type: "text", text: `Movido ${src} -> ${dest}` } ] };
+      }
+
+      case "file_info": {
+        const { file_path } = args;
+        const info = await getFileInfo(file_path);
+        return { content: [ { type: "text", text: JSON.stringify(info, null, 2) } ] };
+      }
+
+      case "insert_line": {
+        const { file_path, line_number, content } = args;
+        await insertLine(file_path, line_number, content);
+        return { content: [ { type: "text", text: `Línea insertada en ${file_path}` } ] };
+      }
+
+      case "delete_line": {
+        const { file_path, line_number } = args;
+        await deleteLine(file_path, line_number);
+        return { content: [ { type: "text", text: `Línea ${line_number} eliminada en ${file_path}` } ] };
+      }
+
+      case "replace_text": {
+        const { file_path, search, replace } = args;
+        await replaceText(file_path, search, replace);
+        return { content: [ { type: "text", text: `Texto reemplazado en ${file_path}` } ] };
+      }
+
+      case "compute_hash": {
+        const { file_path, algorithm = "sha256" } = args;
+        const hash = await computeHash(file_path, algorithm);
+        return { content: [ { type: "text", text: `${algorithm}: ${hash}` } ] };
+      }
+
       default:
         throw new Error(`Herramienta desconocida: ${name}`);
     }
@@ -726,7 +910,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Servidor MCP de archivos iniciado (v0.3.0 con herramientas ampliadas)");
+  console.error("Servidor MCP de archivos iniciado (v0.4.0 con herramientas ampliadas)");
 }
 
 main().catch(console.error);

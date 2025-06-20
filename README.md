@@ -38,3 +38,16 @@ Crea un archivo llamado `claude_desktop_config.json` con el siguiente contenido 
 }
 ```
 Clonar este repositorio y poner en el archivo `claude_desktop_config.json` la url de la ubicacion server.js
+
+## 🛠 Herramientas disponibles
+
+La versión 0.3.0 del servidor expone varias herramientas MCP para facilitar operaciones locales:
+
+- `read_file`, `write_file`, `create_directory`, `list_directory`, `delete_file`
+- `search_text`, `find_files`
+- `edit_line` para modificar una línea concreta de un archivo
+- `file_manage` con acciones *create*, *read*, *write*, *delete* y *rename*
+- `shell_execute` para lanzar comandos de shell
+- `db_query` que ejecuta consultas SQL usando `sqlite3`
+- `http_request` para realizar peticiones HTTP
+- `doc_summarize` que resume documentos de texto

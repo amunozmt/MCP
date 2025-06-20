@@ -8,11 +8,15 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import fs from "fs-extra";
 import path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const server = new Server(
   {
     name: "file-operations-server",
-    version: "0.2.0",
+    version: "0.3.0",
   },
   {
     capabilities: {
@@ -109,6 +113,70 @@ async function searchTextInFiles(searchText, basePath, options = {}) {
 
   await searchInDirectory(basePath);
   return results;
+}
+
+async function editLine(filePath, lineNumber, newContent) {
+  const content = await fs.readFile(filePath, "utf-8");
+  const lines = content.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length) {
+    throw new Error("Número de línea fuera de rango");
+  }
+  lines[lineNumber - 1] = newContent;
+  await fs.writeFile(filePath, lines.join("\n"));
+}
+
+async function fileManage(action, filePath, content = "", newName) {
+  switch (action) {
+    case "create":
+      await fs.ensureFile(filePath);
+      break;
+    case "read":
+      return await fs.readFile(filePath, "utf-8");
+    case "write":
+      await fs.writeFile(filePath, content);
+      break;
+    case "delete":
+      await fs.remove(filePath);
+      break;
+    case "rename":
+      if (!newName) {
+        throw new Error("new_name requerido para rename");
+      }
+      await fs.rename(filePath, newName);
+      break;
+    default:
+      throw new Error(`Acción no soportada: ${action}`);
+  }
+}
+
+async function shellExecute(command, timeout = 60000) {
+  const { stdout, stderr } = await execAsync(command, { timeout });
+  return { stdout, stderr };
+}
+
+async function dbQuery(connectionString, query) {
+  const cmd = `sqlite3 ${connectionString} "${query.replace(/"/g, '\\"')}"`;
+  const { stdout, stderr } = await execAsync(cmd);
+  if (stderr) {
+    return stderr;
+  }
+  return stdout;
+}
+
+async function httpRequest(method, url, headers = {}, body = null) {
+  const res = await fetch(url, { method, headers, body });
+  const text = await res.text();
+  return {
+    status: res.status,
+    headers: Object.fromEntries(res.headers.entries()),
+    body: text,
+  };
+}
+
+async function summarizeDocument(filePath, length = 100) {
+  const content = await fs.readFile(filePath, "utf-8");
+  const words = content.split(/\s+/).slice(0, length);
+  return words.join(" ");
 }
 
 // Herramienta para listar archivos
@@ -263,6 +331,87 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["pattern", "directory"],
         },
+      },
+      {
+        name: "edit_line",
+        description: "Modifica una línea específica de un archivo de texto",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del archivo" },
+            line_number: { type: "number", description: "Número de línea" },
+            new_content: { type: "string", description: "Nuevo contenido" }
+          },
+          required: ["file_path", "line_number", "new_content"]
+        }
+      },
+      {
+        name: "file_manage",
+        description: "Operaciones genéricas con archivos",
+        inputSchema: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              enum: ["create", "read", "write", "delete", "rename"],
+              description: "Acción a realizar"
+            },
+            path: { type: "string", description: "Ruta del archivo" },
+            content: { type: "string", description: "Contenido opcional" },
+            new_name: { type: "string", description: "Nuevo nombre para rename" }
+          },
+          required: ["action", "path"]
+        }
+      },
+      {
+        name: "shell_execute",
+        description: "Ejecuta un comando de shell y devuelve la salida",
+        inputSchema: {
+          type: "object",
+          properties: {
+            command: { type: "string", description: "Comando a ejecutar" },
+            timeout: { type: "number", description: "Tiempo máximo en segundos", default: 60 }
+          },
+          required: ["command"]
+        }
+      },
+      {
+        name: "db_query",
+        description: "Ejecuta consultas SQL utilizando sqlite3",
+        inputSchema: {
+          type: "object",
+          properties: {
+            connection_string: { type: "string", description: "Ruta de la base de datos" },
+            query: { type: "string", description: "Consulta a ejecutar" }
+          },
+          required: ["connection_string", "query"]
+        }
+      },
+      {
+        name: "http_request",
+        description: "Realiza una petición HTTP básica",
+        inputSchema: {
+          type: "object",
+          properties: {
+            method: { type: "string", enum: ["GET", "POST", "PUT", "DELETE"], default: "GET" },
+            url: { type: "string", description: "URL destino" },
+            headers: { type: "object", description: "Cabeceras" },
+            body: { type: "string", description: "Cuerpo de la petición" }
+          },
+          required: ["method", "url"]
+        }
+      },
+      {
+        name: "doc_summarize",
+        description: "Resume un documento de texto devolviendo las primeras palabras",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_path: { type: "string", description: "Ruta del documento" },
+            length: { type: "number", description: "Número de palabras", default: 100 }
+          },
+          required: ["file_path"]
+        }
       },
     ],
   };
@@ -463,9 +612,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "find_files": {
-        const { 
-          pattern, 
-          directory, 
+        const {
+          pattern,
+          directory,
           case_sensitive = false,
           max_results = 100
         } = args;
@@ -508,6 +657,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "edit_line": {
+        const { file_path, line_number, new_content } = args;
+        await editLine(file_path, line_number, new_content);
+        return {
+          content: [
+            { type: "text", text: `Línea ${line_number} de ${file_path} actualizada` }
+          ]
+        };
+      }
+
+      case "file_manage": {
+        const { action, path: filePath, content = "", new_name } = args;
+        const result = await fileManage(action, filePath, content, new_name);
+        const response = result !== undefined ? `Resultado: ${result}` : `Acción ${action} completada`;
+        return {
+          content: [ { type: "text", text: response } ]
+        };
+      }
+
+      case "shell_execute": {
+        const { command, timeout = 60 } = args;
+        const { stdout, stderr } = await shellExecute(command, timeout * 1000);
+        return { content: [ { type: "text", text: `STDOUT:\n${stdout}\nSTDERR:\n${stderr}` } ] };
+      }
+
+      case "db_query": {
+        const { connection_string, query } = args;
+        const output = await dbQuery(connection_string, query);
+        return { content: [ { type: "text", text: output } ] };
+      }
+
+      case "http_request": {
+        const { method, url, headers = {}, body = null } = args;
+        const result = await httpRequest(method, url, headers, body);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Status: ${result.status}\n${JSON.stringify(result.headers)}\n\n${result.body}`
+            }
+          ]
+        };
+      }
+
+      case "doc_summarize": {
+        const { file_path, length = 100 } = args;
+        const summary = await summarizeDocument(file_path, length);
+        return { content: [ { type: "text", text: summary } ] };
+      }
+
       default:
         throw new Error(`Herramienta desconocida: ${name}`);
     }
@@ -527,7 +726,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Servidor MCP de archivos iniciado (v0.2.0 con búsqueda)");
+  console.error("Servidor MCP de archivos iniciado (v0.3.0 con herramientas ampliadas)");
 }
 
 main().catch(console.error);
